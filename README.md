@@ -1,2 +1,2 @@
 # Linux-Cluster
-Linux cluster using ansible for orchestration and freeipa for
+Linux cluster using ansible for orchestration and freeipa for idM
