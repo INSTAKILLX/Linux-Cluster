@@ -1,0 +1,67 @@
+---
+- name: Prepare all SentinelFlow Linux hosts (Ubuntu 24.04)
+  hosts: all
+  become: true
+  tasks:
+    - name: Require Ubuntu 24.04
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Ubuntu"
+          - ansible_distribution_major_version | int == 24
+        fail_msg: >-
+          These playbooks target Ubuntu 24.04. If you want another distro,
+          adjust the package and service tasks accordingly.
+
+    - name: Set host FQDN
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Add bootstrap host mappings
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} SENTINELFLOW CLUSTER"
+        block: |
+          {{ hostvars[groups['controller'][0]].ansible_host }} {{ groups['controller'][0] }} controller
+          {% for h in groups['workers'] %}
+          {{ hostvars[h].ansible_host }} {{ h }} {{ h.split('.')[0] }}
+          {% endfor %}
+
+    - name: Install common packages
+      ansible.builtin.apt:
+        name:
+          - chrony
+          - ufw
+          - curl
+          - tar
+          - python3
+          - python3-pip
+          - jq
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - lsb-release
+        state: present
+        update_cache: true
+
+    - name: Enable time sync
+      ansible.builtin.systemd:
+        name: chrony
+        enabled: true
+        state: started
+
+    - name: Allow cluster CIDR in UFW
+      ansible.builtin.command: >-
+        ufw allow from {{ cluster_cidr }}
+      register: ufw_cluster
+      changed_when: "'Rule added' in ufw_cluster.stdout"
+      failed_when: false
+
+    - name: Ensure SSH is allowed in UFW
+      ansible.builtin.command: ufw allow ssh
+      register: ufw_ssh
+      changed_when: "'Rule added' in ufw_ssh.stdout"
+      failed_when: false
+
+    - name: Enable UFW
+      ansible.builtin.command: ufw --force enable
+      changed_when: false
