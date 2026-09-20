@@ -1,0 +1,25 @@
+---
+- name: Deploy one Kafka broker, Cassandra node and Spark worker per machine
+  hosts: workers
+  become: true
+  serial: 3
+  tasks:
+    - name: Create worker deployment directory
+      ansible.builtin.file:
+        path: /opt/sentinelflow/worker
+        state: directory
+        mode: '0755'
+
+    - name: Render per-machine data-plane Compose file
+      ansible.builtin.template:
+        src: ../templates/worker-compose.yml.j2
+        dest: /opt/sentinelflow/worker/compose.yml
+        mode: '0644'
+
+    - name: Pull worker images
+      ansible.builtin.command: docker compose -f /opt/sentinelflow/worker/compose.yml pull
+      changed_when: true
+
+    - name: Start worker data plane
+      ansible.builtin.command: docker compose -f /opt/sentinelflow/worker/compose.yml up -d
+      changed_when: true

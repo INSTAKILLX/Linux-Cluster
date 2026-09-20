@@ -1,0 +1,9 @@
+---
+- import_playbook: 00-common.yml
+- import_playbook: 10-freeipa-server.yml
+- import_playbook: 20-freeipa-clients.yml
+- import_playbook: 30-docker.yml
+- import_playbook: 40-workers.yml
+- import_playbook: 50-init-data-plane.yml
+- import_playbook: 60-controller.yml
+- import_playbook: 70-telemetry.yml

@@ -1,0 +1,68 @@
+services:
+  kafka:
+    image: apache/kafka:{{ kafka_version }}
+    container_name: sentinelflow-kafka
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: "{{ node_id }}"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://{{ ansible_host }}:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@{{ hostvars[groups['workers'][0]].ansible_host }}:9093,2@{{ hostvars[groups['workers'][1]].ansible_host }}:9093,3@{{ hostvars[groups['workers'][2]].ansible_host }}:9093"
+      CLUSTER_ID: "{{ kafka_cluster_id }}"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "3"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "3"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "2"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "3"
+      KAFKA_MIN_INSYNC_REPLICAS: "2"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+  cassandra:
+    image: cassandra:{{ cassandra_version }}
+    container_name: sentinelflow-cassandra
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      CASSANDRA_CLUSTER_NAME: SentinelFlow
+      CASSANDRA_DC: dc1
+      CASSANDRA_RACK: "{{ cassandra_rack }}"
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      CASSANDRA_SEEDS: "{{ hostvars[groups['workers'][0]].ansible_host }},{{ hostvars[groups['workers'][1]].ansible_host }}"
+      CASSANDRA_LISTEN_ADDRESS: "{{ ansible_host }}"
+      CASSANDRA_BROADCAST_ADDRESS: "{{ ansible_host }}"
+      CASSANDRA_RPC_ADDRESS: 0.0.0.0
+      CASSANDRA_BROADCAST_RPC_ADDRESS: "{{ ansible_host }}"
+      MAX_HEAP_SIZE: 1G
+      HEAP_NEWSIZE: 256M
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+
+  spark-worker:
+    image: apache/spark:{{ spark_version }}
+    container_name: sentinelflow-spark-worker
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - --host
+      - "{{ ansible_host }}"
+      - --port
+      - "7078"
+      - --webui-port
+      - "8081"
+      - --cores
+      - "2"
+      - --memory
+      - 2g
+      - spark://{{ controller_ip }}:7077
+
+volumes:
+  kafka_data:
+  cassandra_data:

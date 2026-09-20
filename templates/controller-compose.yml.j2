@@ -1,0 +1,85 @@
+services:
+  spark-master:
+    image: apache/spark:{{ spark_version }}
+    container_name: sentinelflow-spark-master
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.master.Master
+      - --host
+      - "{{ controller_ip }}"
+      - --port
+      - "7077"
+      - --webui-port
+      - "8080"
+
+  event-writer:
+    build: /opt/sentinelflow/event-writer
+    container_name: sentinelflow-event-writer
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "{{ kafka_bootstrap_servers }}"
+      CASSANDRA_HOSTS: "{{ cassandra_hosts }}"
+
+  api:
+    build: /opt/sentinelflow/api
+    container_name: sentinelflow-api
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      CASSANDRA_HOSTS: "{{ cassandra_hosts }}"
+
+  agent:
+    build: /opt/sentinelflow/agent
+    container_name: sentinelflow-agent
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "{{ kafka_bootstrap_servers }}"
+      GRAPHQL_URL: http://127.0.0.1:8000/graphql
+      OPENAI_API_KEY: "{{ openai_api_key | default('') }}"
+      OPENAI_MODEL: "{{ openai_model | default('gpt-5') }}"
+
+  spark-job:
+    build: /opt/sentinelflow/spark
+    container_name: sentinelflow-spark-job
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - /opt/sentinelflow/spark:/opt/sentinelflow/spark:ro
+      - spark_checkpoints:/tmp/sentinelflow-checkpoints
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - spark://{{ controller_ip }}:7077
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_2.13:{{ spark_version }}
+      - --conf
+      - spark.driver.host={{ controller_ip }}
+      - --conf
+      - spark.driver.bindAddress=0.0.0.0
+      - --conf
+      - spark.driver.port=7080
+      - --conf
+      - spark.blockManager.port=7081
+      - --conf
+      - spark.executor.cores=2
+      - /opt/sentinelflow/spark/streaming_alerts.py
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "{{ kafka_bootstrap_servers }}"
+      PYSPARK_PYTHON: python3
+
+  dashboard:
+    image: python:3.12-slim
+    container_name: sentinelflow-dashboard
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /site
+    volumes:
+      - /opt/sentinelflow/dashboard:/site:ro
+    command: ["python", "-m", "http.server", "8088", "--bind", "0.0.0.0"]
+
+volumes:
+  spark_checkpoints:

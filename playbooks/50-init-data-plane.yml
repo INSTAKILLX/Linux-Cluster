@@ -1,0 +1,66 @@
+---
+- name: Initialize Kafka topics and Cassandra schema once the three workers are healthy
+  hosts: controller
+  become: true
+  tasks:
+    - name: Create initialization directory
+      ansible.builtin.file:
+        path: /opt/sentinelflow/init
+        state: directory
+        mode: '0755'
+
+    - name: Copy Cassandra schema
+      ansible.builtin.copy:
+        src: ../../cassandra/schema.cql
+        dest: /opt/sentinelflow/init/schema.cql
+        mode: '0644'
+
+    - name: Wait for Cassandra CQL on all nodes
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item].ansible_host }}"
+        port: 9042
+        timeout: 300
+      loop: "{{ groups['workers'] }}"
+
+    - name: Wait for Kafka client port on all nodes
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item].ansible_host }}"
+        port: 9092
+        timeout: 300
+      loop: "{{ groups['workers'] }}"
+
+    - name: Wait until Cassandra reports all three nodes Up/Normal
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for i in $(seq 1 60); do
+          n=$(docker run --rm --network host cassandra:{{ cassandra_version }} nodetool -h {{ hostvars[groups['workers'][0]].ansible_host }} status 2>/dev/null | awk '/^UN/{c++} END{print c+0}')
+          [ "$n" -ge 3 ] && exit 0
+          sleep 5
+        done
+        echo "Cassandra never reached 3 Up/Normal nodes" >&2
+        exit 1
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Apply Cassandra RF=3 schema
+      ansible.builtin.command: >-
+        docker run --rm --network host
+        -v /opt/sentinelflow/init/schema.cql:/schema.cql:ro
+        cassandra:{{ cassandra_version }}
+        cqlsh {{ hostvars[groups['workers'][0]].ansible_host }} -f /schema.cql
+      changed_when: true
+
+    - name: Create Kafka topics with replication factor three
+      ansible.builtin.shell: |
+        set -euo pipefail
+        BOOT={{ hostvars[groups['workers'][0]].ansible_host }}:9092
+        for spec in security-events:6 security-alerts:3 agent-actions:3; do
+          topic=${spec%%:*}; parts=${spec##*:}
+          docker run --rm --network host apache/kafka:{{ kafka_version }} \
+            /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$BOOT" \
+            --create --if-not-exists --topic "$topic" --partitions "$parts" --replication-factor 3
+        done
+      args:
+        executable: /bin/bash
+      changed_when: true

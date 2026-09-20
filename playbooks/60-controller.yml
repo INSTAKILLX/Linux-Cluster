@@ -1,0 +1,55 @@
+---
+- name: Deploy Spark master, persister, GraphQL API and investigation agent on controller
+  hosts: controller
+  become: true
+  vars_files:
+    - ../secrets.yml
+  tasks:
+    - name: Create controller application directory
+      ansible.builtin.file:
+        path: "/opt/sentinelflow/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - agent
+        - api
+        - event-writer
+        - spark
+        - simulator
+        - dashboard
+        - cluster/bin
+        - controller
+
+    - name: Copy controller service sources
+      ansible.builtin.copy:
+        src: "../../{{ item }}/"
+        dest: "/opt/sentinelflow/{{ item }}/"
+        mode: preserve
+      loop:
+        - agent
+        - api
+        - event-writer
+        - spark
+        - simulator
+        - dashboard
+        - cluster/bin
+
+    - name: Copy cluster helper scripts to controller
+      ansible.builtin.copy:
+        src: ../bin/
+        dest: /opt/sentinelflow/cluster/bin/
+        mode: preserve
+
+    - name: Render controller Compose file
+      ansible.builtin.template:
+        src: ../templates/controller-compose.yml.j2
+        dest: /opt/sentinelflow/controller/compose.yml
+        mode: '0600'
+
+    - name: Pull/build controller services
+      ansible.builtin.command: docker compose -f /opt/sentinelflow/controller/compose.yml build --pull
+      changed_when: true
+
+    - name: Start controller services
+      ansible.builtin.command: docker compose -f /opt/sentinelflow/controller/compose.yml up -d
+      changed_when: true

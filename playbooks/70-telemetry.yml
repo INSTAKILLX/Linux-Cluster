@@ -1,0 +1,60 @@
+---
+- name: Stream real sshd authentication events from every worker into Kafka
+  hosts: workers
+  become: true
+  tasks:
+    - name: Create telemetry directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /opt/sentinelflow/telemetry
+        - /etc/sentinelflow
+
+    - name: Copy SSH telemetry collector
+      ansible.builtin.copy:
+        src: ../telemetry/sshd_to_kafka.py
+        dest: /opt/sentinelflow/telemetry/sshd_to_kafka.py
+        mode: '0755'
+
+    - name: Create telemetry virtualenv and install Kafka client
+      ansible.builtin.pip:
+        name: kafka-python-ng
+        virtualenv: /opt/sentinelflow/telemetry/venv
+        virtualenv_command: python3 -m venv
+
+    - name: Write telemetry environment
+      ansible.builtin.copy:
+        dest: /etc/sentinelflow/telemetry.env
+        owner: root
+        group: root
+        mode: '0600'
+        content: |
+          KAFKA_BOOTSTRAP_SERVERS={{ kafka_bootstrap_servers }}
+          KAFKA_TOPIC=security-events
+
+    - name: Install telemetry service
+      ansible.builtin.template:
+        src: ../templates/sentinelflow-telemetry.service.j2
+        dest: /etc/systemd/system/sentinelflow-telemetry.service
+        mode: '0644'
+      notify:
+        - Reload systemd
+        - Restart telemetry
+
+    - name: Enable telemetry service
+      ansible.builtin.systemd:
+        name: sentinelflow-telemetry
+        enabled: true
+        state: started
+        daemon_reload: true
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+    - name: Restart telemetry
+      ansible.builtin.systemd:
+        name: sentinelflow-telemetry
+        state: restarted
