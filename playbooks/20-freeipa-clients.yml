@@ -1,0 +1,69 @@
+---
+- name: Enroll data nodes into FreeIPA (Ubuntu 24.04)
+  hosts: workers
+  become: true
+  serial: 1
+  vars_files:
+    - ../secrets.yml
+  tasks:
+    - name: Install FreeIPA client and helpers
+      ansible.builtin.apt:
+        name:
+          - freeipa-client
+          - sssd
+          - libpam-sss
+          - libpam-mkhomedir
+        state: present
+        update_cache: true
+
+    - name: Check client enrollment
+      ansible.builtin.stat:
+        path: /etc/ipa/default.conf
+      register: ipa_client_config
+
+    - name: Enroll worker into FreeIPA
+      ansible.builtin.command:
+        argv:
+          - ipa-client-install
+          - -U
+          - "--hostname={{ inventory_hostname }}"
+          - "--server={{ ipa_server_fqdn }}"
+          - "--domain={{ ipa_domain }}"
+          - "--realm={{ ipa_realm }}"
+          - --principal=admin
+          - "--password={{ ipa_admin_password }}"
+          - --mkhomedir
+          - --no-ntp
+        creates: /etc/ipa/default.conf
+      no_log: true
+      when: not ipa_client_config.stat.exists
+
+    - name: Configure PAM to create home directories
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/common-session
+        line: 'session optional pam_mkhomedir.so umask=0022 skel=/etc/skel'
+        create: false
+
+    - name: Enable GSSAPI SSH authentication
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/91-sentinelflow-ipa.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          UsePAM yes
+          GSSAPIAuthentication yes
+          GSSAPICleanupCredentials yes
+      notify: Restart sshd
+
+    - name: Start and enable SSSD
+      ansible.builtin.systemd:
+        name: sssd
+        enabled: true
+        state: started
+
+  handlers:
+    - name: Restart sshd
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted

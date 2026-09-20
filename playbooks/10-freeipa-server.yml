@@ -1,0 +1,84 @@
+---
+- name: Install central FreeIPA identity service on controller (Ubuntu 24.04)
+  hosts: controller
+  become: true
+  vars_files:
+    - ../secrets.yml
+  tasks:
+    - name: Install FreeIPA server and DNS packages
+      ansible.builtin.apt:
+        name:
+          - freeipa-server
+          - freeipa-server-dns
+        state: present
+        update_cache: true
+
+    - name: Check whether FreeIPA is already configured
+      ansible.builtin.stat:
+        path: /etc/ipa/default.conf
+      register: ipa_config
+
+    - name: Install FreeIPA server
+      ansible.builtin.command:
+        argv:
+          - ipa-server-install
+          - -U
+          - "--hostname={{ ipa_server_fqdn }}"
+          - "--domain={{ ipa_domain }}"
+          - "--realm={{ ipa_realm }}"
+          - "--ds-password={{ ipa_directory_manager_password }}"
+          - "--admin-password={{ ipa_admin_password }}"
+          - --setup-dns
+          - "--forwarder={{ dns_forwarder }}"
+          - --mkhomedir
+          - --no-ntp
+        creates: /etc/ipa/default.conf
+      no_log: true
+      when: not ipa_config.stat.exists
+
+    - name: Obtain administrator Kerberos ticket
+      ansible.builtin.shell: |
+        set -o pipefail
+        printf '%s\n' "{{ ipa_admin_password }}" | kinit admin
+      args:
+        executable: /bin/bash
+      no_log: true
+      changed_when: false
+
+    - name: Create operators group if absent
+      ansible.builtin.shell: >-
+        ipa group-show cluster-operators >/dev/null 2>&1 ||
+        ipa group-add cluster-operators
+        --desc='SentinelFlow cluster SSH operators'
+      register: operators_group
+      changed_when: operators_group.rc == 0 and 'Added group' in operators_group.stdout
+
+    - name: Create cluster hostgroup if absent
+      ansible.builtin.shell: >-
+        ipa hostgroup-show cluster-nodes >/dev/null 2>&1 ||
+        ipa hostgroup-add cluster-nodes
+        --desc='SentinelFlow Linux cluster nodes'
+      changed_when: false
+
+    - name: Add enrolled hosts to cluster hostgroup when present
+      ansible.builtin.shell: |
+        for h in {{ controller_fqdn }} {% for h in groups['workers'] %}{{ h }} {% endfor %}; do
+          ipa host-show "$h" >/dev/null 2>&1 && \
+          ipa hostgroup-add-member cluster-nodes --hosts="$h" >/dev/null 2>&1 || true
+        done
+      changed_when: false
+
+    - name: Create SSH HBAC rule without enforcing it yet
+      ansible.builtin.shell: |
+        ipa hbacrule-show cluster-ssh >/dev/null 2>&1 || \
+        ipa hbacrule-add cluster-ssh
+        --desc='Allow cluster operators to SSH to cluster nodes'
+        ipa hbacrule-add-user cluster-ssh --groups=cluster-operators >/dev/null 2>&1 || true
+        ipa hbacrule-add-host cluster-ssh --hostgroups=cluster-nodes >/dev/null 2>&1 || true
+        ipa hbacrule-add-service cluster-ssh --hbacsvcs=sshd >/dev/null 2>&1 || true
+      changed_when: false
+
+    - name: Disable allow_all only when explicitly requested
+      ansible.builtin.command: ipa hbacrule-disable allow_all
+      when: enforce_hbac | bool
+      changed_when: true
